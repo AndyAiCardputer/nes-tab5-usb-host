@@ -1,0 +1,22 @@
+# Build files
+build/
+sdkconfig
+sdkconfig.old
+
+# Managed components (auto-downloaded)
+managed_components/
+
+# Dependencies lock (auto-generated)
+dependencies.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+

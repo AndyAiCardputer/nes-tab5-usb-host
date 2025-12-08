@@ -1,0 +1,5 @@
+## IDF Component Manager Manifest File
+dependencies:
+  idf: '>=5.4'
+  espressif/usb_host_hid: ^1.0.4
+

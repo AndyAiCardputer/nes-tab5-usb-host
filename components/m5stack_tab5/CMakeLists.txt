@@ -1,0 +1,17 @@
+
+idf_component_register(
+    SRCS "m5stack_tab5.c" "esp_lcd_st7123.c"
+    INCLUDE_DIRS "include"
+    INCLUDE_DIRS "include/bsp"
+    PRIV_INCLUDE_DIRS "priv_include"
+    REQUIRES 
+        driver 
+        esp_lcd
+        esp_codec_dev
+	esp_lcd_ili9881c
+    esp_lcd_touch_st7123
+        esp_driver_i2s
+    PRIV_REQUIRES usb spiffs fatfs esp_driver_ledc
+)
+
+target_compile_definitions(${COMPONENT_LIB} PRIVATE BSP_CONFIG_NO_GRAPHIC_LIB=1)
