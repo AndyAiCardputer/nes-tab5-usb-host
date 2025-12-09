@@ -483,8 +483,9 @@ esp_err_t nes_input_init(void)
 
 void nes_input_process(void)
 {
-    // This function is called from osd_getinput() now
-    // Keep it empty or remove it
+    // Call osd_getinput() to update input state and send events to nofrendo
+    // This is used when nofrendo is running
+    osd_getinput();
 }
 
 // ============================================================================
@@ -516,6 +517,12 @@ static void audio_playback_task(void* pvParameters);
 
 esp_err_t nes_audio_init(void)
 {
+    // Check if already initialized (prevent re-initialization)
+    if (s_audio_initialized && s_codec_handle) {
+        ESP_LOGW(TAG, "Audio already initialized");
+        return ESP_OK;
+    }
+    
     ESP_LOGI(TAG, "Initializing ES8388 audio codec...");
     
     // 1. Initialize BSP I2C (if not already initialized)
@@ -1322,6 +1329,169 @@ void osd_getinput(void)
     old_state = state;
 }
 
+// Update input state without calling event system (for file browser)
+// This function reads input but doesn't call event_get() which requires nofrendo initialization
+static void nes_input_update_state(void)
+{
+    uint32_t state = 0xFFFFFFFF;  // All buttons released by default
+    
+    // Read Joystick2 via PaHub Channel 0
+    if (joystick2_available) {
+        uint8_t joy_x = 0, joy_y = 0, joy_button = 0;
+        if (read_joystick2(&joy_x, &joy_y, &joy_button)) {
+            const uint8_t threshold = 40;
+            const uint8_t center = 127;
+            
+            if (joy_x < (center - threshold)) {
+                state &= ~(1UL << 3);  // Right
+            }
+            if (joy_x > (center + threshold)) {
+                state &= ~(1UL << 2);  // Left
+            }
+            if (joy_y < (center - threshold)) {
+                state &= ~(1UL << 1);  // Down
+            }
+            if (joy_y > (center + threshold)) {
+                state &= ~(1UL << 0);  // Up
+            }
+            
+            // Joystick button = Start (bit 5)
+            if (joy_button == 1) {
+                state &= ~(1UL << 5);  // Start
+            }
+        }
+    }
+    
+    // Read buttons A and B (Scroll units, only buttons, no encoder)
+    static uint8_t input_frame_counter = 0;
+    input_frame_counter++;
+    
+    if ((input_frame_counter % 2) == 0) {  // Read every 2 frames (~30 FPS for input)
+        // Update Button A
+        if (scroll_a_available) {
+            update_button_state(&button_a_state, PAHUB_CH_SCROLL_A, scroll_a_dev_handle);
+            if (button_a_state.debounced_state) {
+                state &= ~(1UL << 6);  // A button
+            }
+        }
+        
+        // Update Button B
+        if (scroll_b_available) {
+            update_button_state(&button_b_state, PAHUB_CH_SCROLL_B, scroll_b_dev_handle);
+            if (button_b_state.debounced_state) {
+                state &= ~(1UL << 7);  // B button
+            }
+        }
+    }
+    
+    // Read USB gamepad (highest priority - overrides other inputs)
+    if (s_usb_gamepad_connected) {
+        // Map USB gamepad buttons to NES buttons
+        // NES button bits: 0=Up, 1=Down, 2=Left, 3=Right, 4=Select, 5=Start, 6=A, 7=B
+        
+        // D-Pad mapping
+        uint8_t dpad = s_usb_gamepad_state.dpad;
+        if (dpad == 1 || dpad == 8 || dpad == 2) {  // UP, UP-LEFT, UP-RIGHT
+            state &= ~(1UL << 0);  // Up
+        }
+        if (dpad == 5 || dpad == 6 || dpad == 4) {  // DOWN, DOWN-LEFT, DOWN-RIGHT
+            state &= ~(1UL << 1);  // Down
+        }
+        if (dpad == 7 || dpad == 8 || dpad == 6) {  // LEFT, UP-LEFT, DOWN-LEFT
+            state &= ~(1UL << 2);  // Left
+        }
+        if (dpad == 3 || dpad == 2 || dpad == 4) {  // RIGHT, UP-RIGHT, DOWN-RIGHT
+            state &= ~(1UL << 3);  // Right
+        }
+        
+        // Left stick as D-Pad (with threshold)
+        const int8_t stick_threshold = 40;
+        if (s_usb_gamepad_state.left_y < -stick_threshold) {
+            state &= ~(1UL << 0);  // Up
+        }
+        if (s_usb_gamepad_state.left_y > stick_threshold) {
+            state &= ~(1UL << 1);  // Down
+        }
+        if (s_usb_gamepad_state.left_x < -stick_threshold) {
+            state &= ~(1UL << 2);  // Left
+        }
+        if (s_usb_gamepad_state.left_x > stick_threshold) {
+            state &= ~(1UL << 3);  // Right
+        }
+        
+        // Button mapping (PS5 DualSense)
+        // Cross (bit 1) -> NES B (bit 7)
+        if (s_usb_gamepad_state.buttons & (1 << 1)) {
+            state &= ~(1UL << 7);  // B button
+        }
+        // Circle (bit 2) -> NES A (bit 6)
+        if (s_usb_gamepad_state.buttons & (1 << 2)) {
+            state &= ~(1UL << 6);  // A button
+        }
+        // Create (bit 6) -> NES Select (bit 4)
+        if (s_usb_gamepad_state.buttons & (1 << 6)) {
+            state &= ~(1UL << 4);  // Select
+        }
+        // Options (bit 7) -> NES Start (bit 5)
+        if (s_usb_gamepad_state.buttons & (1 << 7)) {
+            state &= ~(1UL << 5);  // Start
+        }
+    }
+    
+    // Update nes_input_state
+    nes_input_state = state;
+}
+
+// Input state reading functions for file browser
+// NES button bits: 0=Up, 1=Down, 2=Left, 3=Right, 5=Start, 6=A, 7=B
+// Button is pressed when bit is 0 (inverted logic)
+
+// Safe version for file browser (doesn't call event_get)
+void nes_input_update_state_safe(void)
+{
+    nes_input_update_state();
+}
+
+bool nes_input_is_up_pressed(void)
+{
+    return (nes_input_state & (1UL << 0)) == 0;
+}
+
+bool nes_input_is_down_pressed(void)
+{
+    return (nes_input_state & (1UL << 1)) == 0;
+}
+
+bool nes_input_is_left_pressed(void)
+{
+    return (nes_input_state & (1UL << 2)) == 0;
+}
+
+bool nes_input_is_right_pressed(void)
+{
+    return (nes_input_state & (1UL << 3)) == 0;
+}
+
+bool nes_input_is_start_pressed(void)
+{
+    return (nes_input_state & (1UL << 5)) == 0;
+}
+
+bool nes_input_is_select_pressed(void)
+{
+    return (nes_input_state & (1UL << 4)) == 0;
+}
+
+bool nes_input_is_a_pressed(void)
+{
+    return (nes_input_state & (1UL << 6)) == 0;
+}
+
+bool nes_input_is_b_pressed(void)
+{
+    return (nes_input_state & (1UL << 7)) == 0;
+}
+
 void osd_getmouse(int *x, int *y, int *button)
 {
     (void)x; (void)y; (void)button;
@@ -1385,6 +1555,207 @@ void osd_shutdown(void)
     if (nes_bitmap) {
         bmp_destroy(&nes_bitmap);
     }
+}
+
+// ============================================================================
+// FILE BROWSER DRAWING FUNCTIONS
+// ============================================================================
+
+// Simple 8x8 bitmap font (ASCII 32-126) - full font
+static const uint8_t font_8x8[95][8] = {
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // Space (32)
+    {0x18, 0x3C, 0x3C, 0x18, 0x18, 0x00, 0x18, 0x00}, // ! (33)
+    {0x36, 0x36, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // " (34)
+    {0x36, 0x36, 0x7F, 0x36, 0x7F, 0x36, 0x36, 0x00}, // # (35)
+    {0x0C, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x0C, 0x00}, // $ (36)
+    {0x00, 0x63, 0x33, 0x18, 0x0C, 0x66, 0x63, 0x00}, // % (37)
+    {0x1C, 0x36, 0x1C, 0x6E, 0x3B, 0x33, 0x6E, 0x00}, // & (38)
+    {0x06, 0x06, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00}, // ' (39)
+    {0x18, 0x0C, 0x06, 0x06, 0x06, 0x0C, 0x18, 0x00}, // ( (40)
+    {0x06, 0x0C, 0x18, 0x18, 0x18, 0x0C, 0x06, 0x00}, // ) (41)
+    {0x00, 0x66, 0x3C, 0xFF, 0x3C, 0x66, 0x00, 0x00}, // * (42)
+    {0x00, 0x0C, 0x0C, 0x7F, 0x0C, 0x0C, 0x00, 0x00}, // + (43)
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x06, 0x00}, // , (44)
+    {0x00, 0x00, 0x00, 0x7F, 0x00, 0x00, 0x00, 0x00}, // - (45)
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C, 0x00}, // . (46)
+    {0x60, 0x30, 0x18, 0x0C, 0x06, 0x03, 0x01, 0x00}, // / (47)
+    {0x3E, 0x63, 0x73, 0x7B, 0x6F, 0x67, 0x63, 0x3E}, // 0 (48)
+    {0x0C, 0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x3F}, // 1 (49)
+    {0x1E, 0x33, 0x30, 0x1C, 0x06, 0x33, 0x33, 0x3F}, // 2 (50)
+    {0x1E, 0x33, 0x30, 0x1C, 0x30, 0x33, 0x33, 0x1E}, // 3 (51)
+    {0x38, 0x3C, 0x36, 0x33, 0x7F, 0x30, 0x30, 0x78}, // 4 (52)
+    {0x3F, 0x03, 0x03, 0x1F, 0x30, 0x30, 0x33, 0x1E}, // 5 (53)
+    {0x1C, 0x06, 0x03, 0x1F, 0x33, 0x33, 0x33, 0x1E}, // 6 (54)
+    {0x3F, 0x33, 0x30, 0x18, 0x0C, 0x0C, 0x0C, 0x0C}, // 7 (55)
+    {0x1E, 0x33, 0x33, 0x1E, 0x33, 0x33, 0x33, 0x1E}, // 8 (56)
+    {0x1E, 0x33, 0x33, 0x33, 0x3E, 0x30, 0x18, 0x0E}, // 9 (57)
+    {0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x0C, 0x00}, // : (58)
+    {0x00, 0x0C, 0x0C, 0x00, 0x00, 0x0C, 0x06, 0x00}, // ; (59)
+    {0x18, 0x0C, 0x06, 0x03, 0x06, 0x0C, 0x18, 0x00}, // < (60)
+    {0x00, 0x00, 0x7F, 0x00, 0x00, 0x7F, 0x00, 0x00}, // = (61)
+    {0x06, 0x0C, 0x18, 0x30, 0x18, 0x0C, 0x06, 0x00}, // > (62)
+    {0x1E, 0x33, 0x30, 0x18, 0x0C, 0x00, 0x0C, 0x00}, // ? (63)
+    {0x3E, 0x63, 0x7B, 0x7B, 0x7B, 0x03, 0x1E, 0x00}, // @ (64)
+    {0x0C, 0x1E, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x00}, // A (65)
+    {0x3F, 0x66, 0x66, 0x3E, 0x66, 0x66, 0x3F, 0x00}, // B (66)
+    {0x3C, 0x66, 0x03, 0x03, 0x03, 0x66, 0x3C, 0x00}, // C (67)
+    {0x1F, 0x36, 0x66, 0x66, 0x66, 0x36, 0x1F, 0x00}, // D (68)
+    {0x7F, 0x06, 0x06, 0x3E, 0x06, 0x06, 0x7F, 0x00}, // E (69)
+    {0x7F, 0x06, 0x06, 0x3E, 0x06, 0x06, 0x06, 0x00}, // F (70)
+    {0x3C, 0x66, 0x03, 0x03, 0x73, 0x66, 0x7C, 0x00}, // G (71)
+    {0x33, 0x33, 0x33, 0x3F, 0x33, 0x33, 0x33, 0x00}, // H (72)
+    {0x1E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00}, // I (73)
+    {0x78, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E, 0x00}, // J (74)
+    {0x67, 0x66, 0x36, 0x1E, 0x36, 0x66, 0x67, 0x00}, // K (75)
+    {0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x7F, 0x00}, // L (76)
+    {0x63, 0x77, 0x7F, 0x6B, 0x63, 0x63, 0x63, 0x00}, // M (77)
+    {0x63, 0x67, 0x6F, 0x7B, 0x73, 0x63, 0x63, 0x00}, // N (78)
+    {0x1C, 0x36, 0x63, 0x63, 0x63, 0x36, 0x1C, 0x00}, // O (79)
+    {0x3F, 0x66, 0x66, 0x3E, 0x06, 0x06, 0x06, 0x00}, // P (80)
+    {0x1E, 0x33, 0x33, 0x33, 0x3B, 0x1E, 0x38, 0x00}, // Q (81)
+    {0x3F, 0x66, 0x66, 0x3E, 0x36, 0x66, 0x67, 0x00}, // R (82)
+    {0x1E, 0x33, 0x07, 0x0E, 0x38, 0x33, 0x1E, 0x00}, // S (83)
+    {0x3F, 0x2D, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00}, // T (84)
+    {0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x1E, 0x00}, // U (85)
+    {0x33, 0x33, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00}, // V (86)
+    {0x63, 0x63, 0x63, 0x6B, 0x7F, 0x77, 0x63, 0x00}, // W (87)
+    {0x63, 0x63, 0x36, 0x1C, 0x1C, 0x36, 0x63, 0x00}, // X (88)
+    {0x33, 0x33, 0x33, 0x1E, 0x0C, 0x0C, 0x1E, 0x00}, // Y (89)
+    {0x7F, 0x63, 0x31, 0x18, 0x4C, 0x66, 0x7F, 0x00}, // Z (90)
+    {0x1E, 0x06, 0x06, 0x06, 0x06, 0x06, 0x1E, 0x00}, // [ (91)
+    {0x03, 0x06, 0x0C, 0x18, 0x30, 0x60, 0x40, 0x00}, // \ (92)
+    {0x1E, 0x18, 0x18, 0x18, 0x18, 0x18, 0x1E, 0x00}, // ] (93)
+    {0x08, 0x1C, 0x36, 0x63, 0x00, 0x00, 0x00, 0x00}, // ^ (94)
+    {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF}, // _ (95)
+    {0x0C, 0x0C, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00}, // ` (96)
+    {0x00, 0x00, 0x1E, 0x30, 0x3E, 0x33, 0x6E, 0x00}, // a (97)
+    {0x07, 0x06, 0x06, 0x3E, 0x66, 0x66, 0x3B, 0x00}, // b (98)
+    {0x00, 0x00, 0x1E, 0x33, 0x03, 0x33, 0x1E, 0x00}, // c (99)
+    {0x38, 0x30, 0x30, 0x3e, 0x33, 0x33, 0x6E, 0x00}, // d (100)
+    {0x00, 0x00, 0x1E, 0x33, 0x3f, 0x03, 0x1E, 0x00}, // e (101)
+    {0x1C, 0x36, 0x06, 0x0f, 0x06, 0x06, 0x0F, 0x00}, // f (102)
+    {0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x1F}, // g (103)
+    {0x07, 0x06, 0x36, 0x6E, 0x66, 0x66, 0x67, 0x00}, // h (104)
+    {0x0C, 0x00, 0x0E, 0x0C, 0x0C, 0x0C, 0x1E, 0x00}, // i (105)
+    {0x30, 0x00, 0x30, 0x30, 0x30, 0x33, 0x33, 0x1E}, // j (106)
+    {0x07, 0x06, 0x66, 0x36, 0x1E, 0x36, 0x67, 0x00}, // k (107)
+    {0x0E, 0x0C, 0x0C, 0x0C, 0x0C, 0x0C, 0x1E, 0x00}, // l (108)
+    {0x00, 0x00, 0x33, 0x7F, 0x7F, 0x6B, 0x63, 0x00}, // m (109)
+    {0x00, 0x00, 0x1F, 0x33, 0x33, 0x33, 0x33, 0x00}, // n (110)
+    {0x00, 0x00, 0x1E, 0x33, 0x33, 0x33, 0x1E, 0x00}, // o (111)
+    {0x00, 0x00, 0x3B, 0x66, 0x66, 0x3E, 0x06, 0x0F}, // p (112)
+    {0x00, 0x00, 0x6E, 0x33, 0x33, 0x3E, 0x30, 0x78}, // q (113)
+    {0x00, 0x00, 0x3B, 0x6E, 0x66, 0x06, 0x0F, 0x00}, // r (114)
+    {0x00, 0x00, 0x3E, 0x03, 0x1E, 0x30, 0x1F, 0x00}, // s (115)
+    {0x08, 0x0C, 0x3E, 0x0C, 0x0C, 0x2C, 0x18, 0x00}, // t (116)
+    {0x00, 0x00, 0x33, 0x33, 0x33, 0x33, 0x6E, 0x00}, // u (117)
+    {0x00, 0x00, 0x33, 0x33, 0x33, 0x1E, 0x0C, 0x00}, // v (118)
+    {0x00, 0x00, 0x63, 0x6B, 0x7F, 0x7F, 0x36, 0x00}, // w (119)
+    {0x00, 0x00, 0x63, 0x36, 0x1C, 0x36, 0x63, 0x00}, // x (120)
+    {0x00, 0x00, 0x33, 0x33, 0x33, 0x3E, 0x30, 0x1F}, // y (121)
+    {0x00, 0x00, 0x3F, 0x19, 0x0C, 0x26, 0x3F, 0x00}, // z (122)
+    {0x38, 0x0C, 0x0C, 0x07, 0x0C, 0x0C, 0x38, 0x00}, // { (123)
+    {0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x00}, // | (124)
+    {0x07, 0x0C, 0x0C, 0x38, 0x0C, 0x0C, 0x07, 0x00}, // } (125)
+    {0x6E, 0x3B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, // ~ (126)
+};
+
+// Get font data for character (full ASCII 32-126)
+static const uint8_t* get_font_char(char c) {
+    if (c < 32 || c > 126) {
+        return font_8x8[0]; // Space
+    }
+    return font_8x8[c - 32];
+}
+
+// Convert landscape coordinates to portrait for framebuffer
+// Tab5 display: physical 720x1280 (portrait), rotated 90° left → 1280x720 (landscape)
+// Formula: for landscape (ax, ay) → portrait (px, py) where:
+//   px = ay
+//   py = DISPLAY_PHYSICAL_HEIGHT - ax - 1
+static void set_pixel_landscape(int ax, int ay, uint16_t color) {
+    if (!framebuffer || !display_initialized) return;
+    
+    int px = ay;
+    int py = DISPLAY_PHYSICAL_HEIGHT - ax - 1;
+    
+    if (px >= 0 && px < DISPLAY_PHYSICAL_WIDTH && py >= 0 && py < DISPLAY_PHYSICAL_HEIGHT) {
+        framebuffer[py * DISPLAY_PHYSICAL_WIDTH + px] = color;
+    }
+}
+
+// Clear display with color
+void nes_display_clear(uint16_t color) {
+    if (!framebuffer || !display_initialized) return;
+    
+    for (int i = 0; i < DISPLAY_PHYSICAL_WIDTH * DISPLAY_PHYSICAL_HEIGHT; i++) {
+        framebuffer[i] = color;
+    }
+}
+
+// Draw character at landscape coordinates (ax, ay) with scale (1x or 1.5x)
+void nes_display_draw_char(int ax, int ay, char c, uint16_t color, int scale) {
+    if (!framebuffer || !display_initialized) return;
+    
+    const uint8_t* char_data = get_font_char(c);
+    
+    int char_width = 8 * scale;
+    int char_height = 8 * scale;
+    
+    for (int py = 0; py < 8; py++) {
+        uint8_t row = char_data[py];
+        for (int px = 0; px < 8; px++) {
+            if (row & (1 << px)) {
+                // Draw scaled pixel
+                for (int sy = 0; sy < scale; sy++) {
+                    for (int sx = 0; sx < scale; sx++) {
+                        set_pixel_landscape(ax + px * scale + sx, ay + py * scale + sy, color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Draw string at landscape coordinates
+void nes_display_draw_string(int x, int y, const char* str, uint16_t color, int scale) {
+    if (!str) return;
+    
+    int cx = x;
+    for (const char* p = str; *p; p++) {
+        nes_display_draw_char(cx, y, *p, color, scale);
+        cx += 8 * scale + 1; // Character width + spacing
+    }
+}
+
+// Draw rectangle at landscape coordinates
+void nes_display_draw_rect(int x, int y, int w, int h, uint16_t color) {
+    if (!framebuffer || !display_initialized) return;
+    
+    // Top and bottom lines
+    for (int i = 0; i < w; i++) {
+        set_pixel_landscape(x + i, y, color);
+        set_pixel_landscape(x + i, y + h - 1, color);
+    }
+    
+    // Left and right lines
+    for (int i = 0; i < h; i++) {
+        set_pixel_landscape(x, y + i, color);
+        set_pixel_landscape(x + w - 1, y + i, color);
+    }
+}
+
+// Flush framebuffer to display
+void nes_display_flush(void) {
+    if (!framebuffer || !panel_handle || !display_initialized) return;
+    
+    esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, 
+                              DISPLAY_PHYSICAL_WIDTH, DISPLAY_PHYSICAL_HEIGHT, framebuffer);
+}
+
+// Get framebuffer pointer (for direct access if needed)
+uint16_t* nes_display_get_framebuffer(void) {
+    return framebuffer;
 }
 
 // Main entry point

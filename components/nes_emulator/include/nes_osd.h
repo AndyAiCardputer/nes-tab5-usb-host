@@ -47,6 +47,27 @@ void nes_usb_hid_interface_callback(hid_host_device_handle_t hid_device_handle,
 // Set USB gamepad VID/PID (called from HID device event callback)
 void nes_usb_gamepad_set_vid_pid(uint16_t vid, uint16_t pid);
 
+// File browser drawing functions
+void nes_display_clear(uint16_t color);
+void nes_display_draw_char(int x, int y, char c, uint16_t color, int scale);
+void nes_display_draw_string(int x, int y, const char* str, uint16_t color, int scale);
+void nes_display_draw_rect(int x, int y, int w, int h, uint16_t color);
+void nes_display_flush(void);
+uint16_t* nes_display_get_framebuffer(void);
+
+// Input state reading functions (for file browser)
+// Update input state without nofrendo event system (safe for file browser)
+void nes_input_update_state_safe(void);
+// Returns true if button is currently pressed
+bool nes_input_is_up_pressed(void);
+bool nes_input_is_down_pressed(void);
+bool nes_input_is_left_pressed(void);
+bool nes_input_is_right_pressed(void);
+bool nes_input_is_start_pressed(void);
+bool nes_input_is_select_pressed(void);
+bool nes_input_is_a_pressed(void);
+bool nes_input_is_b_pressed(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -40,6 +40,12 @@
 #include "../vid_drv.h"
 #include "../nofrendo.h"
 
+#ifdef ESP_PLATFORM
+#include "esp_task_wdt.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#endif
+
 #define NES_CLOCK_DIVIDER 12
 //#define  NES_MASTER_CLOCK     21477272.727272727272
 #define NES_MASTER_CLOCK (236250000 / 11)
@@ -368,8 +374,14 @@ static void system_video(bool draw)
 void nes_emulate(void)
 {
    int last_ticks, frames_to_render;
+   int frame_count = 0;  // Counter for periodic delay
 
    osd_setsound(nes.apu->process);
+
+#ifdef ESP_PLATFORM
+   // Register current task with watchdog
+   esp_task_wdt_add(NULL);
+#endif
 
    last_ticks = nofrendo_ticks;
    frames_to_render = 0;
@@ -392,20 +404,47 @@ void nes_emulate(void)
          /* TODO: dim the screen, and pause/silence the apu */
          system_video(true);
          frames_to_render = 0;
+#ifdef ESP_PLATFORM
+         esp_task_wdt_reset();  // Feed watchdog even when paused
+         vTaskDelay(1);  // CRITICAL: Give IDLE task CPU time
+#endif
       }
       else if (frames_to_render > 1)
       {
          frames_to_render--;
          nes_renderframe(false);
          system_video(false);
+#ifdef ESP_PLATFORM
+         frame_count++;
+         esp_task_wdt_reset();  // Feed watchdog after frame
+         // Every 60 frames (~1 second), give IDLE task CPU time
+         if (frame_count >= 60) {
+            frame_count = 0;
+            vTaskDelay(1);
+         }
+#endif
       }
       else if ((1 == frames_to_render && true == nes.autoframeskip) || false == nes.autoframeskip)
       {
          frames_to_render = 0;
          nes_renderframe(true);
          system_video(true);
+#ifdef ESP_PLATFORM
+         frame_count++;
+         esp_task_wdt_reset();  // Feed watchdog after frame
+         // Every 60 frames (~1 second), give IDLE task CPU time
+         if (frame_count >= 60) {
+            frame_count = 0;
+            vTaskDelay(1);
+         }
+#endif
       }
    }
+
+#ifdef ESP_PLATFORM
+   // Unregister task from watchdog when done
+   esp_task_wdt_delete(NULL);
+#endif
 }
 
 static void mem_trash(uint8 *buffer, int length)
