@@ -6,7 +6,7 @@ All three binary files are required for successful flashing:
 
 1. **bootloader.bin** (24 KB) - Bootloader for ESP32-P4
 2. **partition-table.bin** (3 KB) - Partition table configuration
-3. **nes_tab5_file_browser.bin** (641 KB) - Main application
+3. **tab5_nes_emulator_battery.bin** (648 KB) - Main application with battery monitor
 
 ## Flashing Steps
 
@@ -36,10 +36,12 @@ Then flash all files (replace `/dev/cu.usbmodemXXXX` with your actual port):
 
 ```bash
 esptool --chip esp32p4 --port /dev/cu.usbmodemXXXX --baud 921600 write_flash \
-  0x0 bootloader.bin \
+  0x2000 bootloader.bin \
   0x8000 partition-table.bin \
-  0x10000 nes_tab5_file_browser.bin
+  0x10000 tab5_nes_emulator_battery.bin
 ```
+
+**Note:** For ESP32-P4, bootloader address is `0x2000`, not `0x0`.
 
 ### 4. Verify Installation
 
