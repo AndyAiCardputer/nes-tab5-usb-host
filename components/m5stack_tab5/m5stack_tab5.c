@@ -1461,7 +1461,7 @@ esp_err_t bsp_display_new_with_handles_to_st7123(const bsp_display_config_t* con
         .reset_gpio_num = -1,
         .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
         .data_endian    = LCD_RGB_DATA_ENDIAN_LITTLE,
-        .bits_per_pixel = 24,
+        .bits_per_pixel = 16,  // RGB565 uses 16 bits per pixel
         .vendor_config  = &vendor_config,
     };
 

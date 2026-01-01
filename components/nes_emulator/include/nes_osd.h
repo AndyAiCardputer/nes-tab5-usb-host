@@ -54,6 +54,8 @@ void nes_display_draw_string(int x, int y, const char* str, uint16_t color, int 
 void nes_display_draw_rect(int x, int y, int w, int h, uint16_t color);
 void nes_display_flush(void);
 uint16_t* nes_display_get_framebuffer(void);
+void nes_display_test_gradient(void);  // Test function for stride/pitch issues
+void nes_display_draw_battery_indicator(void);  // Draw battery indicator in top-right corner
 
 // Input state reading functions (for file browser)
 // Update input state without nofrendo event system (safe for file browser)

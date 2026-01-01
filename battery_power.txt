@@ -1,0 +1,439 @@
+
+SOLUTION
+STORE
+SOFTWARE
+DOCUMENT
+EXPLORE
+ABOUT US
+FAQ
+
+English
+Arduino Quick Start
+
+Product Name / SKU
+
+Search
+
+M5Unified Power Class
+Power Class
+begin
+setExtOutput
+getExtOutput
+setUsbOutput
+getUsbOutput
+setLed
+powerOff
+timerSleep
+timerSleep
+timerSleep
+deepSleep
+lightSleep
+getBatteryLevel
+setBatteryCharge
+setChargeCurrent
+setChargeVoltage
+isCharging
+getBatteryVoltage
+getBatteryCurrent
+getKeyState
+setVibration
+getType
+begin
+Syntax:
+
+bool begin(void);
+
+Description:
+
+Initialize the Power Management Integrated Circuit (PMIC).
+Parameters:
+
+null
+Return:
+
+bool:
+true: Initialization successful.
+false: Initialization failed.
+setExtOutput
+Syntax:
+
+void setExtOutput(bool enable, ext_port_mask_t port_mask = (ext_port_mask_t)0xFF);
+
+Description:
+
+Set the power output of the external port.
+Parameters:
+
+bool enable:
+Power output enable state:
+true: Enable output.
+false: Disable output.
+ext_port_mask_t port_mask:
+The mask for the output port to operate:
+Valid for devices that support independent power switching for multiple output ports (e.g., M5Station).
+Return:
+
+null
+getExtOutput
+Syntax:
+
+bool getExtOutput(void);
+
+Description:
+
+Read the power output state of the external port.
+Parameters:
+
+null
+Return:
+
+bool:
+true: Output enabled.
+false: Output disabled.
+setUsbOutput
+Syntax:
+
+void setUsbOutput(bool enable);
+
+Description:
+
+Set the USB power output state (for M5Stack CoreS3 main USB port, not for M5Station external USB).
+Parameters:
+
+bool enable:
+USB power output enable state:
+true: Enable output.
+false: Disable output.
+Return:
+
+null
+getUsbOutput
+Syntax:
+
+bool getUsbOutput(void);
+
+Description:
+
+Read the USB power output state (for M5Stack CoreS3 main USB port, not for M5Station external USB).
+Parameters:
+
+bool enable:
+USB power output enable state.
+Return:
+
+bool:
+true: Output enabled.
+false: Output disabled.
+setLed
+Syntax:
+
+void setLed(uint8_t brightness = 255);
+
+Description:
+
+Set the state of the power LED light.
+Parameters:
+
+uint8_t brightness:
+0=OFF
+1-255=ON
+Return:
+
+null
+powerOff
+Syntax:
+
+void powerOff(void);
+
+Description:
+
+Turn off all power supplies.
+Parameters:
+
+null
+Return:
+
+null
+timerSleep
+Note on timerSleep
+Some devices without integrated PMIC, such as M5Paper, cannot power off when powered by USB. This function only works when powered by a battery.
+Syntax:
+
+void timerSleep(int seconds);
+
+Description:
+
+The device sleeps and wakes up after a specified period.
+Parameters:
+
+int seconds:
+Sleep duration in seconds.
+Return:
+
+null
+timerSleep
+Syntax:
+
+void timerSleep(const rtc_time_t& time);
+
+Description:
+
+The device sleeps and wakes up at a specified time.
+Parameters:
+
+const rtc_time_t& time:
+Wake-up time (only minutes and hours can be specified. Seconds are ignored).
+Return:
+
+null
+timerSleep
+Syntax:
+
+void timerSleep(const rtc_date_t& date, const rtc_time_t& time);
+
+Description:
+
+The device sleeps and wakes up at a specified date and time.
+Parameters:
+
+int const rtc_date_t& date:
+Wake-up date (only date and day of the week can be specified. Year and month are ignored).
+const rtc_time_t& time:
+Wake-up time (only minutes and hours can be specified. Seconds are ignored).
+Return:
+
+null
+deepSleep
+Syntax:
+
+void deepSleep(std::uint64_t micro_seconds = 0, bool touch_wakeup = true);
+
+Description:
+
+The chip enters deep sleep and wakes up after a period.
+Parameters:
+
+uint64_t micro_seconds:
+Sleep duration in microseconds.
+bool touch_wakeup:
+Whether to enable touch screen wake-up.
+Return:
+
+null
+lightSleep
+Syntax:
+
+void lightSleep(std::uint64_t micro_seconds = 0, bool touch_wakeup = true);
+
+Description:
+
+The chip enters light sleep and wakes up after a period.
+Parameters:
+
+uint64_t micro_seconds:
+Sleep duration in microseconds.
+bool touch_wakeup:
+Whether to enable touch screen wake-up.
+Return:
+
+null
+getBatteryLevel
+Syntax:
+
+cpp
+
+/// Get the remaining battery power.
+/// @return 0-100 level
+std::int32_t getBatteryLevel(void);
+Description:
+
+Get the reference value of the remaining battery power.
+Parameters:
+
+null
+Return:
+
+int32_t level:
+0-100
+setBatteryCharge
+Syntax:
+
+void setBatteryCharge(bool enable);
+
+Description:
+
+Set the battery charging enable.
+Parameters:
+
+bool enable:
+true: Enable battery charging.
+false: Disable battery charging.
+Return:
+
+null
+setChargeCurrent
+Note on setCharge
+APIs related to setting charging voltage and current are only supported on some devices with integrated PMIC.
+Syntax:
+
+void setChargeCurrent(std::uint16_t max_mA);
+
+Description:
+
+Set the battery charging current.
+Parameters:
+
+uint16_t max_mA:
+Maximum charging current in milliamperes.
+Return:
+
+null
+setChargeVoltage
+Syntax:
+
+void setChargeVoltage(std::uint16_t max_mV);
+
+Description:
+
+Set the battery charging voltage.
+Parameters:
+
+uint16_t max_mV:
+Maximum charging voltage in millivolts.
+Return:
+
+null
+isCharging
+Syntax:
+
+is_charging_t isCharging(void);
+
+Description:
+
+Determine if currently charging.
+Parameters:
+
+null
+Return:
+
+bool:
+true: Charging.
+false: Not charging.
+getBatteryVoltage
+Syntax:
+
+int16_t getBatteryVoltage(void);
+
+Description:
+
+Get the battery voltage.
+Parameters:
+
+null
+Return:
+
+int16_t voltage:
+Battery voltage in millivolts.
+getBatteryCurrent
+Syntax:
+
+int32_t getBatteryCurrent(void);
+
+Description:
+
+Get the battery current.
+Parameters:
+
+null
+Return:
+
+int32_t current:
+Battery current in milliamperes (+=charge / -=discharge).
+getKeyState
+Syntax:
+
+cpp
+
+/// Get Power Key Press condition.
+/// @return 0=none / 1=long pressed / 2=short clicked / 3=both
+/// @attention Only for models with AXP192 or AXP2101
+/// @attention Once this function is called, the value is reset to 0, and the value changes when pressed next time.
+uint8_t getKeyState(void);
+Description:
+
+Get the state of the PMIC button input signal (Only for models with AXP192 or AXP2101). The state is reset after calling this function.
+Parameters:
+
+null
+Return:
+
+uint8_t key:
+none: 0
+long pressed: 1
+short clicked: 2
+both: 3
+setVibration
+Syntax:
+
+void setVibration(uint8_t level);
+
+Description:
+
+Control the vibration motor vibration.
+Parameters:
+
+uint8_t level:
+Vibration level: 0-255, 0=stop.
+Return:
+
+null
+getType
+Syntax:
+
+pmic_t getType(void) const { return _pmic; }
+
+Description:
+
+Get the PMIC type.
+Parameters:
+
+null
+Return:
+
+pmic_t:
+The type of PMIC chip.
+cpp
+
+enum pmic_t
+{ pmic_unknown
+, pmic_adc
+, pmic_axp192
+, pmic_ip5306
+, pmic_axp2101
+};
+Previous
+3. M5Unified - M5Unified API - LED Class
+Next
+3. M5Unified - M5Unified API - IMU Class
+Where to buy
+Distributors
+AliExpress
+Amazon
+Taobao
+Support
+FAQ
+Forum
+Contact Us
+Document
+UiFlow1
+UiFlow2
+Arduino
+StackFlow AI
+Product Guide
+Terms & Conditions
+Terms of Service
+Privacy Policy
+Shipping Policy
+Refund Policy
+Payment Method
+Stay tuned
