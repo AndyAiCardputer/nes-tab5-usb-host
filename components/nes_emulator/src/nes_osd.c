@@ -49,15 +49,23 @@ static bool display_initialized = false;
 #define NES_SCREEN_WIDTH  256
 #define NES_SCREEN_HEIGHT 240
 
-// Tab5 display dimensions (portrait: 720×1280)
+// Tab5 display dimensions (portrait: 720×1280, rotated to landscape: 1280×720)
 #define DISPLAY_PHYSICAL_WIDTH   720
 #define DISPLAY_PHYSICAL_HEIGHT  1280
 
-// Scale for portrait orientation (same as ZX Spectrum)
-// 256 × 2.8125 = 720 (fits exactly in width)
-// 240 × 2.8125 = 675 (centered in height)
-#define SCALE_NUMERATOR 45  // 2.8125 = 45/16
-#define SCALE_DENOMINATOR 16
+// Target NES display size (4:3 aspect ratio, full height)
+// Height: 720 pixels (full display height)
+// Width: 960 pixels (4:3 aspect ratio, centered on 1280 width)
+#define NES_DISPLAY_WIDTH  960   // 720 * (4/3) = 960
+#define NES_DISPLAY_HEIGHT 720   // Full height
+
+// Scale factors for 4:3 aspect ratio
+// X scale: 960 / 256 = 3.75 = 15/4
+// Y scale: 720 / 240 = 3.0 = 3/1
+#define SCALE_X_NUMERATOR 15     // 3.75 = 15/4
+#define SCALE_X_DENOMINATOR 4
+#define SCALE_Y_NUMERATOR 3      // 3.0 = 3/1
+#define SCALE_Y_DENOMINATOR 1
 
 // Framebuffer for scaling
 static uint16_t* framebuffer = NULL;
@@ -840,24 +848,27 @@ static void vid_custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
         framebuffer[i] = bg;
     }
     
-    // Logical NES dimensions after scaling
-    const int LOGICAL_HEIGHT = (NES_SCREEN_HEIGHT * SCALE_NUMERATOR) / SCALE_DENOMINATOR;  // 675
+    // Logical NES dimensions after scaling (before rotation)
+    const int LOGICAL_WIDTH = (NES_SCREEN_WIDTH * SCALE_X_NUMERATOR) / SCALE_X_DENOMINATOR;   // 960
+    const int LOGICAL_HEIGHT = (NES_SCREEN_HEIGHT * SCALE_Y_NUMERATOR) / SCALE_Y_DENOMINATOR; // 720
     
-    // After rotation: 675×720 → 720×675
+    // After rotation 90° right: (960×720) → (720×960)
+    // Center vertically: offset_y = (1280 - 960) / 2 = 160
     const int offset_x = 0;
-    const int offset_y = (DISPLAY_PHYSICAL_HEIGHT - LOGICAL_HEIGHT) / 2; // (1280 - 675)/2 = 302
+    const int offset_y = (DISPLAY_PHYSICAL_HEIGHT - LOGICAL_WIDTH) / 2; // (1280 - 960)/2 = 160
     
-    // Render NES → logic (720×675) → rotation → physical (720×1280)
+    // Render NES → logical (960×720) → rotation → physical (720×1280)
     for (int sy = 0; sy < NES_SCREEN_HEIGHT; sy++) {
         for (int sx = 0; sx < NES_SCREEN_WIDTH; sx++) {
             uint8_t palette_idx = src_lines[sy][sx];
             uint16_t rgb565 = nes_palette[palette_idx];
             
-            int base_log_x = (sx * SCALE_NUMERATOR) / SCALE_DENOMINATOR;
-            int base_log_y = (sy * SCALE_NUMERATOR) / SCALE_DENOMINATOR;
+            // Calculate scaled coordinates with different X and Y scales
+            int base_log_x = (sx * SCALE_X_NUMERATOR) / SCALE_X_DENOMINATOR;
+            int base_log_y = (sy * SCALE_Y_NUMERATOR) / SCALE_Y_DENOMINATOR;
             
-            int next_log_x = ((sx + 1) * SCALE_NUMERATOR) / SCALE_DENOMINATOR;
-            int next_log_y = ((sy + 1) * SCALE_NUMERATOR) / SCALE_DENOMINATOR;
+            int next_log_x = ((sx + 1) * SCALE_X_NUMERATOR) / SCALE_X_DENOMINATOR;
+            int next_log_y = ((sy + 1) * SCALE_Y_NUMERATOR) / SCALE_Y_DENOMINATOR;
             
             int pixel_width  = next_log_x - base_log_x;
             int pixel_height = next_log_y - base_log_y;
@@ -867,9 +878,9 @@ static void vid_custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
                 for (int dx = 0; dx < pixel_width; dx++) {
                     int log_x = base_log_x + dx;
                     
-                    // Rotate 90° right: (x,y) -> (y, H - 1 - x)
+                    // Rotate 90° right: (x,y) -> (y, LOGICAL_WIDTH - 1 - x)
                     int phys_x = log_y + offset_x;
-                    int phys_y = LOGICAL_HEIGHT - 1 - log_x + offset_y;
+                    int phys_y = LOGICAL_WIDTH - 1 - log_x + offset_y;
                     
                     if (phys_x >= 0 && phys_x < DISPLAY_PHYSICAL_WIDTH &&
                         phys_y >= 0 && phys_y < DISPLAY_PHYSICAL_HEIGHT) {

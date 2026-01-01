@@ -39,9 +39,37 @@ idf.py build
 
 ## Flashing
 
+### Option 1: Flash from Source (Recommended)
+
 ```bash
+cd nes_tab5_usb_host
+export IDF_PATH=/path/to/esp-idf
+source $IDF_PATH/export.sh
 idf.py -p /dev/cu.usbmodemXXXX flash
 ```
+
+### Option 2: Flash from GitHub Release
+
+Download all three files from the release:
+- `bootloader.bin`
+- `partition-table.bin`
+- `nes_tab5_file_browser.bin`
+
+Then flash them using esptool:
+
+```bash
+# Make sure ESP-IDF environment is loaded
+export IDF_PATH=/path/to/esp-idf
+source $IDF_PATH/export.sh
+
+# Flash all three files
+esptool --chip esp32p4 --port /dev/cu.usbmodemXXXX --baud 921600 write_flash \
+  0x0 bootloader.bin \
+  0x8000 partition-table.bin \
+  0x10000 nes_tab5_file_browser.bin
+```
+
+**Important:** All three files are required! Flashing only the main binary will result in "invalid header" errors.
 
 ## Usage
 
