@@ -5,7 +5,7 @@ NES emulator for M5Stack Tab5 with built-in file browser for selecting ROM files
 ## Features
 
 - **File Browser**: Browse and select NES ROM files from SD card
-- **USB Host Support**: Use USB gamepad (PS5 DualSense, etc.) for navigation
+- **USB Host Support**: Use USB gamepad (PS5 DualSense only.) for navigation
 - **I2C Input Support**: Joystick2, Scroll buttons, CardKeyBoard
 - **Display**: 1280×720 landscape orientation
 - **Audio**: ES8388 codec support
