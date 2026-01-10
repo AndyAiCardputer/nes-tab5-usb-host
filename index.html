@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NES Emulator Tab5 - Web Flasher</title>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10.1.1/dist/web/install-button.js"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            border-radius: 8px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-top: 0;
+        }
+        .info {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .warning {
+            background: #fff3e0;
+            border-left: 4px solid #ff9800;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        .steps {
+            margin: 20px 0;
+        }
+        .steps ol {
+            line-height: 1.8;
+        }
+        esp-web-install-button {
+            margin: 20px 0;
+            display: block;
+        }
+        code {
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+        ul {
+            line-height: 1.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 NES Emulator Tab5 - Web Flasher</h1>
+        
+        <div class="info">
+            <strong>Flash your M5Stack Tab5 NES Emulator directly from your browser!</strong><br>
+            No drivers or software installation needed. Works with Chrome, Edge, and other browsers with Web Serial API support.
+        </div>
+
+        <div class="warning">
+            <strong>⚠️ Important:</strong>
+            <ul>
+                <li>Connect your Tab5 via USB cable</li>
+                <li>Make sure no other applications are using the serial port</li>
+                <li>All three files (bootloader, partition table, app) will be flashed automatically</li>
+            </ul>
+        </div>
+
+        <div class="steps">
+            <h2>Steps:</h2>
+            <ol>
+                <li>Connect your M5Stack Tab5 to your computer via USB</li>
+                <li>Click the button below to start flashing</li>
+                <li>Grant serial port access when prompted</li>
+                <li>Select your device port (usually <code>/dev/cu.usbmodemXXXX</code> on macOS)</li>
+                <li>Wait for flashing to complete</li>
+                <li>Your Tab5 will reboot automatically</li>
+            </ol>
+        </div>
+
+        <esp-web-install-button 
+            manifest="manifest.json"
+            install-unsupported="true">
+        </esp-web-install-button>
+
+        <h2>After Flashing:</h2>
+        <ul>
+            <li>Insert SD card with ROM files in <code>/sd/roms/</code> folder</li>
+            <li>Power on Tab5</li>
+            <li>File browser will appear showing available ROM files</li>
+            <li>Navigate with D-Pad Up/Down</li>
+            <li>Press Start or A to launch selected game</li>
+        </ul>
+
+        <h2>Troubleshooting:</h2>
+        <ul>
+            <li><strong>Device not found:</strong> Try pressing Reset button on Tab5</li>
+            <li><strong>Port busy:</strong> Close Serial Monitor or other applications using the port</li>
+            <li><strong>Flashing fails:</strong> Make sure you're using a data USB cable (not charging-only)</li>
+            <li><strong>Browser not supported:</strong> Use Chrome 89+, Edge 89+, or Opera 75+</li>
+        </ul>
+
+        <h2>Project Info:</h2>
+        <p>
+            This is the NES Emulator for M5Stack Tab5 with built-in file browser.
+            Source code: <a href="https://github.com/AndyAiCardputer" target="_blank">GitHub</a>
+        </p>
+    </div>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "NES Emulator for M5Stack Tab5",
+  "version": "1.0.0",
+  "description": "NES emulator with file browser for M5Stack Tab5 (ESP32-P4) - Working firmware with minimal bugs",
+  "builds": [
+    {
+      "chipFamily": "ESP32-P4",
+      "parts": [
+        {
+          "path": "firmware/tab5_nes_merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}
