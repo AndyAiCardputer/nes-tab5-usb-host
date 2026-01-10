@@ -1,0 +1,24 @@
+{
+  "name": "NES Emulator for M5Stack Tab5 (Three Files)",
+  "version": "1.0.0",
+  "description": "NES emulator with file browser for M5Stack Tab5 (ESP32-P4) - Alternative manifest using three separate files",
+  "builds": [
+    {
+      "chipFamily": "ESP32-P4",
+      "parts": [
+        {
+          "path": "firmware/bootloader.bin",
+          "offset": 0
+        },
+        {
+          "path": "firmware/partition-table.bin",
+          "offset": 32768
+        },
+        {
+          "path": "firmware/nes_tab5_file_browser.bin",
+          "offset": 65536
+        }
+      ]
+    }
+  ]
+}
