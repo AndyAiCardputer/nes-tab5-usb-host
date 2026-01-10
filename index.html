@@ -46,6 +46,7 @@
         esp-web-install-button {
             margin: 20px 0;
             display: block;
+            min-height: 50px;
         }
         code {
             background: #f5f5f5;
@@ -55,6 +56,28 @@
         }
         ul {
             line-height: 1.8;
+        }
+        .button-fallback {
+            display: none;
+            margin: 20px 0;
+            padding: 15px 30px;
+            background: #2196f3;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+        }
+        .button-fallback:hover {
+            background: #1976d2;
+        }
+        esp-web-install-button:not(:defined) + .button-fallback {
+            display: block;
+        }
+        .loading {
+            color: #666;
+            font-style: italic;
         }
     </style>
 </head>
@@ -72,7 +95,7 @@
             <ul>
                 <li>Connect your Tab5 via USB cable</li>
                 <li>Make sure no other applications are using the serial port</li>
-                <li>All three files (bootloader, partition table, app) will be flashed automatically</li>
+                <li>All files will be flashed automatically</li>
             </ul>
         </div>
 
@@ -88,10 +111,16 @@
             </ol>
         </div>
 
-        <esp-web-install-button 
-            manifest="manifest.json"
-            install-unsupported="true">
-        </esp-web-install-button>
+        <div id="install-area">
+            <esp-web-install-button 
+                manifest="manifest.json"
+                install-unsupported="true">
+            </esp-web-install-button>
+            <button class="button-fallback" onclick="handleFallbackClick()">
+                Install Button Not Loading? Click Here for Help
+            </button>
+            <p class="loading" id="loading-msg">Loading install button...</p>
+        </div>
 
         <h2>After Flashing:</h2>
         <ul>
@@ -104,6 +133,7 @@
 
         <h2>Troubleshooting:</h2>
         <ul>
+            <li><strong>Button not showing:</strong> Open browser console (F12) and check for errors. Make sure you're using Chrome 89+, Edge 89+, or Opera 75+. Check that manifest.json is accessible.</li>
             <li><strong>Device not found:</strong> Try pressing Reset button on Tab5</li>
             <li><strong>Port busy:</strong> Close Serial Monitor or other applications using the port</li>
             <li><strong>Flashing fails:</strong> Make sure you're using a data USB cable (not charging-only)</li>
@@ -116,5 +146,47 @@
             Source code: <a href="https://github.com/AndyAiCardputer" target="_blank">GitHub</a>
         </p>
     </div>
+    
+    <script>
+        function handleFallbackClick() {
+            const msg = 'The install button requires:\n\n' +
+                       '1. Chrome 89+, Edge 89+, or Opera 75+\n' +
+                       '2. Web Serial API support\n' +
+                       '3. manifest.json file accessible\n\n' +
+                       'Please:\n' +
+                       '- Open browser console (F12) to check for errors\n' +
+                       '- Verify manifest.json is accessible\n' +
+                       '- Try refreshing the page';
+            alert(msg);
+        }
+
+        // Check if custom element is defined
+        setTimeout(() => {
+            const loadingMsg = document.getElementById('loading-msg');
+            const installButton = document.querySelector('esp-web-install-button');
+            
+            if (customElements.get('esp-web-install-button')) {
+                loadingMsg.style.display = 'none';
+                console.log('✅ esp-web-install-button loaded successfully');
+            } else {
+                loadingMsg.textContent = '⚠️ Install button failed to load. Check console for errors.';
+                loadingMsg.style.color = '#d32f2f';
+                console.error('❌ esp-web-install-button not loaded. Check browser console for errors.');
+                
+                // Check if manifest.json is accessible
+                fetch('manifest.json')
+                    .then(response => {
+                        if (response.ok) {
+                            console.log('✅ manifest.json is accessible');
+                        } else {
+                            console.error('❌ manifest.json not accessible:', response.status);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('❌ Error checking manifest.json:', error);
+                    });
+            }
+        }, 2000);
+    </script>
 </body>
 </html>
