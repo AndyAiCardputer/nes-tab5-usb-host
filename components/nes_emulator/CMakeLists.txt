@@ -31,8 +31,10 @@ idf_component_register(
         fatfs
         m5stack_tab5
         usb_host_hid
+        battery_monitor
     PRIV_REQUIRES 
         esp_codec_dev
+        esp_mm
 )
 
 # Disable graphic library in BSP (we use direct LCD API)

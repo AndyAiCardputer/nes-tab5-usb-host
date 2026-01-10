@@ -16,6 +16,10 @@
 #include "freertos/queue.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_types.h"
+#include "esp_cache.h"
+#include "esp_lcd_mipi_dsi.h"
+#include "freertos/semphr.h"
+#include "battery_monitor.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -52,6 +56,9 @@ static bool display_initialized = false;
 // Tab5 display dimensions (portrait: 720×1280, rotated to landscape: 1280×720)
 #define DISPLAY_PHYSICAL_WIDTH   720
 #define DISPLAY_PHYSICAL_HEIGHT  1280
+// Landscape dimensions (for UI elements)
+#define DISPLAY_LANDSCAPE_WIDTH  1280
+#define DISPLAY_LANDSCAPE_HEIGHT 720
 
 // Target NES display size (4:3 aspect ratio, full height)
 // Height: 720 pixels (full display height)
@@ -69,6 +76,9 @@ static bool display_initialized = false;
 
 // Framebuffer for scaling
 static uint16_t* framebuffer = NULL;
+
+// DMA2D synchronization
+static SemaphoreHandle_t g_copy_done_sem = NULL;
 
 // ============================================================================
 // PAHUB AND I2C KEYBOARD SUPPORT
@@ -261,6 +271,19 @@ static void update_button_state(ButtonState* state, uint8_t channel, i2c_master_
     }
 }
 
+// Callback вызывается когда DMA2D закончил копирование данных
+static bool on_color_trans_done_cb(esp_lcd_panel_handle_t panel,
+                                   esp_lcd_dpi_panel_event_data_t *edata,
+                                   void *user_ctx)
+{
+    (void)panel; (void)edata; (void)user_ctx;
+    BaseType_t hp = pdFALSE;
+    if (g_copy_done_sem) {
+        xSemaphoreGiveFromISR(g_copy_done_sem, &hp);
+    }
+    return hp == pdTRUE;
+}
+
 esp_err_t nes_display_init(void)
 {
     if (display_initialized) {
@@ -299,22 +322,58 @@ esp_err_t nes_display_init(void)
     }
     bsp_display_brightness_set(80);
 
-    // Allocate framebuffer in PSRAM (physical size!)
+    // Allocate framebuffer in PSRAM with DMA capability
     size_t fb_size = DISPLAY_PHYSICAL_WIDTH * DISPLAY_PHYSICAL_HEIGHT * sizeof(uint16_t);
-    framebuffer = (uint16_t*)heap_caps_malloc(fb_size, MALLOC_CAP_SPIRAM);
+    framebuffer = (uint16_t*)heap_caps_malloc(
+        fb_size,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT
+    );
     if (!framebuffer) {
-        framebuffer = (uint16_t*)malloc(fb_size);
+        // Fallback: try without DMA flag
+        framebuffer = (uint16_t*)heap_caps_malloc(fb_size, MALLOC_CAP_SPIRAM);
         if (!framebuffer) {
-            ESP_LOGE(TAG, "Failed to allocate framebuffer");
-            return ESP_ERR_NO_MEM;
+            framebuffer = (uint16_t*)malloc(fb_size);
+            if (!framebuffer) {
+                ESP_LOGE(TAG, "Failed to allocate framebuffer");
+                return ESP_ERR_NO_MEM;
+            }
+            ESP_LOGW(TAG, "Framebuffer allocated in internal RAM");
+        } else {
+            ESP_LOGW(TAG, "Framebuffer allocated in PSRAM (without DMA flag)");
         }
-        ESP_LOGW(TAG, "Framebuffer allocated in internal RAM");
     } else {
-        ESP_LOGI(TAG, "Framebuffer allocated in PSRAM (%zu bytes)", fb_size);
+        ESP_LOGI(TAG, "Framebuffer allocated in PSRAM with DMA capability (%zu bytes)", fb_size);
     }
+
+    // Create semaphore for DMA2D synchronization
+    g_copy_done_sem = xSemaphoreCreateBinary();
+    if (!g_copy_done_sem) {
+        ESP_LOGE(TAG, "Failed to create copy done semaphore");
+        return ESP_ERR_NO_MEM;
+    }
+    // Allow first frame to proceed
+    xSemaphoreGive(g_copy_done_sem);
+
+    // Register callbacks for DMA2D synchronization
+    esp_lcd_dpi_panel_event_callbacks_t cbs = {
+        .on_color_trans_done = on_color_trans_done_cb,
+        .on_refresh_done = NULL,  // We don't need refresh done callback
+    };
+    ret = esp_lcd_dpi_panel_register_event_callbacks(panel_handle, &cbs, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to register DPI panel callbacks: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ESP_LOGI(TAG, "DPI panel callbacks registered");
 
     display_initialized = true;
     ESP_LOGI(TAG, "Display initialized: %dx%d", DISPLAY_PHYSICAL_WIDTH, DISPLAY_PHYSICAL_HEIGHT);
+    
+    // TEMPORARY: Test gradient to check for stride/pitch issues
+    // Uncomment to test:
+    // nes_display_test_gradient();
+    // vTaskDelay(pdMS_TO_TICKS(5000)); // Show for 5 seconds
+    
     return ESP_OK;
 }
 
@@ -663,6 +722,10 @@ void nes_osd_shutdown(void)
         free(framebuffer);
         framebuffer = NULL;
     }
+    if (g_copy_done_sem) {
+        vSemaphoreDelete(g_copy_done_sem);
+        g_copy_done_sem = NULL;
+    }
 }
 
 // ============================================================================
@@ -840,6 +903,15 @@ static void vid_custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
         return;
     }
     
+    // CRITICAL: Wait for previous DMA2D copy to complete
+    // This prevents race condition: CPU writing while DMA reading
+    if (g_copy_done_sem) {
+        if (xSemaphoreTake(g_copy_done_sem, portMAX_DELAY) != pdTRUE) {
+            ESP_LOGW(TAG, "Failed to take copy done semaphore");
+            return;
+        }
+    }
+    
     const uint8_t **src_lines = (const uint8_t **)bmp->line;
     
     // Black background (faster than memset for large buffer)
@@ -857,6 +929,14 @@ static void vid_custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
     const int offset_x = 0;
     const int offset_y = (DISPLAY_PHYSICAL_HEIGHT - LOGICAL_WIDTH) / 2; // (1280 - 960)/2 = 160
     
+    // Additional cleanup: explicitly clear the rendering area to prevent artifacts
+    // After rotation, NES area is: phys_x = 0..719, phys_y = offset_y..(offset_y+LOGICAL_WIDTH-1)
+    for (int py = offset_y; py < offset_y + LOGICAL_WIDTH; py++) {
+        for (int px = 0; px < DISPLAY_PHYSICAL_WIDTH; px++) {
+            framebuffer[py * DISPLAY_PHYSICAL_WIDTH + px] = bg;
+        }
+    }
+    
     // Render NES → logical (960×720) → rotation → physical (720×1280)
     for (int sy = 0; sy < NES_SCREEN_HEIGHT; sy++) {
         for (int sx = 0; sx < NES_SCREEN_WIDTH; sx++) {
@@ -870,18 +950,33 @@ static void vid_custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
             int next_log_x = ((sx + 1) * SCALE_X_NUMERATOR) / SCALE_X_DENOMINATOR;
             int next_log_y = ((sy + 1) * SCALE_Y_NUMERATOR) / SCALE_Y_DENOMINATOR;
             
+            // Ensure we cover the full logical width/height (fix for edge pixels)
+            if (sx == NES_SCREEN_WIDTH - 1) {
+                next_log_x = LOGICAL_WIDTH;  // Force to end: 960
+            }
+            if (sy == NES_SCREEN_HEIGHT - 1) {
+                next_log_y = LOGICAL_HEIGHT;  // Force to end: 720
+            }
+            
             int pixel_width  = next_log_x - base_log_x;
             int pixel_height = next_log_y - base_log_y;
             
+            // Render all pixels for this NES pixel
             for (int dy = 0; dy < pixel_height; dy++) {
                 int log_y = base_log_y + dy;
+                // Clamp log_y to valid range
+                if (log_y < 0 || log_y >= LOGICAL_HEIGHT) continue;
+                
                 for (int dx = 0; dx < pixel_width; dx++) {
                     int log_x = base_log_x + dx;
+                    // Clamp log_x to valid range
+                    if (log_x < 0 || log_x >= LOGICAL_WIDTH) continue;
                     
                     // Rotate 90° right: (x,y) -> (y, LOGICAL_WIDTH - 1 - x)
                     int phys_x = log_y + offset_x;
                     int phys_y = LOGICAL_WIDTH - 1 - log_x + offset_y;
                     
+                    // Final bounds check - ensure we're within framebuffer
                     if (phys_x >= 0 && phys_x < DISPLAY_PHYSICAL_WIDTH &&
                         phys_y >= 0 && phys_y < DISPLAY_PHYSICAL_HEIGHT) {
                         framebuffer[phys_y * DISPLAY_PHYSICAL_WIDTH + phys_x] = rgb565;
@@ -891,7 +986,32 @@ static void vid_custom_blit(bitmap_t *bmp, int num_dirties, rect_t *dirty_rects)
         }
     }
     
-    // Draw to display
+    // After rendering, verify coverage (debug)
+    static int debug_frame = 0;
+    debug_frame++;
+    if (debug_frame % 300 == 0) {  // Every 5 seconds at 60 FPS
+        int rendered_pixels = 0;
+        int total_pixels = DISPLAY_PHYSICAL_WIDTH * LOGICAL_WIDTH;
+        for (int py = offset_y; py < offset_y + LOGICAL_WIDTH && py < DISPLAY_PHYSICAL_HEIGHT; py++) {
+            for (int px = 0; px < DISPLAY_PHYSICAL_WIDTH; px++) {
+                if (framebuffer[py * DISPLAY_PHYSICAL_WIDTH + px] != bg) {
+                    rendered_pixels++;
+                }
+            }
+        }
+        ESP_LOGI(TAG, "Rendered %d/%d pixels in NES area (%.1f%%)", 
+                 rendered_pixels, total_pixels, (rendered_pixels * 100.0f) / total_pixels);
+    }
+    
+    // Draw battery indicator in top-right corner
+    nes_display_draw_battery_indicator();
+    
+    // CRITICAL: Flush cache before DMA2D reads the buffer
+    // This ensures DMA sees the latest data written by CPU
+    size_t fb_size = DISPLAY_PHYSICAL_WIDTH * DISPLAY_PHYSICAL_HEIGHT * sizeof(uint16_t);
+    esp_cache_msync((void*)framebuffer, fb_size, ESP_CACHE_MSYNC_FLAG_DIR_C2M | ESP_CACHE_MSYNC_FLAG_UNALIGNED);
+    
+    // Draw to display (triggers DMA2D copy)
     esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, 
                               DISPLAY_PHYSICAL_WIDTH, DISPLAY_PHYSICAL_HEIGHT, framebuffer);
     
@@ -1762,6 +1882,181 @@ void nes_display_flush(void) {
     
     esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, 
                               DISPLAY_PHYSICAL_WIDTH, DISPLAY_PHYSICAL_HEIGHT, framebuffer);
+}
+
+// Test function to check for stride/pitch issues
+void nes_display_test_gradient(void)
+{
+    if (!framebuffer || !display_initialized) {
+        ESP_LOGE(TAG, "Display not initialized for gradient test");
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Drawing gradient test pattern (vertical stripes)...");
+    
+    // Fill framebuffer with vertical stripes (color depends only on X)
+    // This will show wrap-around on right edge if stride is wrong
+    for (int y = 0; y < DISPLAY_PHYSICAL_HEIGHT; y++) {
+        for (int x = 0; x < DISPLAY_PHYSICAL_WIDTH; x++) {
+            // Create vertical stripes: every 10 pixels = different color
+            // This makes it easy to see wrap-around
+            int stripe = (x / 10) % 8;  // 8 different colors repeating
+            uint16_t color;
+            switch (stripe) {
+                case 0: color = 0x0000; break;  // Black
+                case 1: color = 0xF800; break;  // Red
+                case 2: color = 0x07E0; break;  // Green
+                case 3: color = 0xFFE0; break;  // Yellow
+                case 4: color = 0x001F; break;  // Blue
+                case 5: color = 0xF81F; break;  // Magenta
+                case 6: color = 0x07FF; break;  // Cyan
+                case 7: color = 0xFFFF; break;  // White
+                default: color = 0x0000; break;
+            }
+            framebuffer[y * DISPLAY_PHYSICAL_WIDTH + x] = color;
+        }
+    }
+    
+    // Draw to display
+    esp_lcd_panel_draw_bitmap(panel_handle, 0, 0, 
+                              DISPLAY_PHYSICAL_WIDTH, DISPLAY_PHYSICAL_HEIGHT, framebuffer);
+    
+    ESP_LOGI(TAG, "Gradient test complete. Check if right edge shows wrap-around.");
+}
+
+// Draw battery indicator in top-right corner
+// Updates once per second to avoid excessive I2C reads
+void nes_display_draw_battery_indicator(void)
+{
+    if (!framebuffer || !display_initialized) {
+        return;
+    }
+    
+    static uint32_t last_update_time = 0;
+    static battery_status_t cached_status = {0};
+    
+    // Update battery status once per second
+    uint32_t current_time = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    if (current_time - last_update_time >= 1000) {
+        battery_monitor_read(&cached_status);
+        last_update_time = current_time;
+    }
+    
+    // Position in top-right corner (landscape: 1280x720)
+    // Battery icon: 80x40 pixels (2x larger), offset from edge
+    const int icon_x = DISPLAY_LANDSCAPE_WIDTH - 100;  // 1280 - 100 = 1180 (moved left for larger icon)
+    const int icon_y = 5;
+    const int icon_width = 80;   // 40 * 2
+    const int icon_height = 40;  // 20 * 2
+    
+    // Colors
+    const uint16_t COLOR_BG = 0x0000;      // Black
+    const uint16_t COLOR_FRAME = 0xFFFF;   // White
+    const uint16_t COLOR_FULL = 0x07E0;    // Green
+    const uint16_t COLOR_MED = 0xFFE0;     // Yellow
+    const uint16_t COLOR_LOW = 0xF800;     // Red
+    const uint16_t COLOR_CHARGING = 0xF800; // Red (for charging lightning icon)
+    
+    // Clear area (slightly larger to clear previous text and "CHARGING" text)
+    // icon_height (40) + percentage text (20) + "CHARGING" text (10) + margin (10) = 80
+    for (int y = icon_y - 4; y < icon_y + icon_height + 50; y++) {
+        for (int x = icon_x - 4; x < DISPLAY_LANDSCAPE_WIDTH; x++) {
+            if (x >= 0 && x < DISPLAY_LANDSCAPE_WIDTH && y >= 0 && y < DISPLAY_LANDSCAPE_HEIGHT) {
+                set_pixel_landscape(x, y, COLOR_BG);
+            }
+        }
+    }
+    
+    // Draw battery frame
+    // Outer rectangle
+    for (int x = icon_x; x < icon_x + icon_width - 12; x++) {
+        set_pixel_landscape(x, icon_y, COLOR_FRAME);
+        set_pixel_landscape(x, icon_y + icon_height - 1, COLOR_FRAME);
+    }
+    for (int y = icon_y; y < icon_y + icon_height; y++) {
+        set_pixel_landscape(icon_x, y, COLOR_FRAME);
+        set_pixel_landscape(icon_x + icon_width - 13, y, COLOR_FRAME);
+    }
+    
+    // Battery terminal (right side) - 2x larger
+    for (int y = icon_y + 12; y < icon_y + 28; y++) {
+        set_pixel_landscape(icon_x + icon_width - 12, y, COLOR_FRAME);
+        set_pixel_landscape(icon_x + icon_width - 11, y, COLOR_FRAME);
+        set_pixel_landscape(icon_x + icon_width - 10, y, COLOR_FRAME);
+        set_pixel_landscape(icon_x + icon_width - 9, y, COLOR_FRAME);
+        set_pixel_landscape(icon_x + icon_width - 8, y, COLOR_FRAME);
+    }
+    
+    // Determine fill color based on level
+    uint16_t fill_color = COLOR_LOW;
+    if (cached_status.level > 60) {
+        fill_color = COLOR_FULL;
+    } else if (cached_status.level > 20) {
+        fill_color = COLOR_MED;
+    }
+    
+    // Draw battery fill
+    if (cached_status.level >= 0 && cached_status.level <= 100) {
+        int fill_width = ((icon_width - 16) * cached_status.level) / 100;
+        if (fill_width > 0) {
+            for (int x = icon_x + 4; x < icon_x + 4 + fill_width && x < icon_x + icon_width - 13; x++) {
+                for (int y = icon_y + 4; y < icon_y + icon_height - 4; y++) {
+                    set_pixel_landscape(x, y, fill_color);
+                }
+            }
+        }
+    }
+    
+    // Draw percentage text below icon (2x larger font)
+    if (cached_status.level >= 0 && cached_status.level <= 100) {
+        char percent_str[5];
+        snprintf(percent_str, sizeof(percent_str), "%d%%", cached_status.level);
+        
+        // Draw text in larger font (scale 2)
+        int text_x = icon_x + (icon_width - strlen(percent_str) * 16) / 2;  // 8 * 2 = 16
+        int text_y = icon_y + icon_height + 4;
+        
+        nes_display_draw_string(text_x, text_y, percent_str, COLOR_FRAME, 2);
+        
+        // Determine charging status using multiple methods:
+        // 1. USB-C detection (may not be reliable)
+        // 2. Battery voltage (charging usually increases voltage)
+        bool usb_c_connected = bsp_usb_c_detect();
+        
+        // Log USB-C status occasionally for debugging
+        static int usb_log_counter = 0;
+        static bool last_usb_status = false;
+        if (usb_c_connected != last_usb_status || (usb_log_counter++ % 300) == 0) {
+            ESP_LOGI(TAG, "USB-C detect: %s, Battery: %dmV (%d%%)", 
+                     usb_c_connected ? "CONNECTED" : "DISCONNECTED",
+                     cached_status.voltage_mv, cached_status.level);
+            last_usb_status = usb_c_connected;
+        }
+        
+        // Method 1: USB-C detection (if working)
+        // Method 2: Voltage-based detection
+        // For 2S Li-Po: charging typically happens when voltage > 7.8V (3.9V per cell)
+        // Or when voltage is increasing (but we don't track history here)
+        bool voltage_charging = (cached_status.voltage_mv > 7800);  // > 7.8V = likely charging
+        
+        // Use USB-C detection if available, otherwise fall back to voltage
+        // But if USB-C always returns true, we need to invert or use voltage only
+        // For now, let's try: charging = USB-C connected AND voltage > threshold
+        // This way, if USB-C detection is broken, voltage check will prevent false positives
+        bool is_charging = usb_c_connected && voltage_charging;
+        
+        // Draw "CHARGING" text below percentage if charging
+        if (is_charging) {
+            const char* charging_text = "CHARGING";
+            int charging_x = icon_x + (icon_width - strlen(charging_text) * 8) / 2;  // Scale 1 = 8 pixels per char
+            int charging_y = text_y + 20;  // Below percentage text
+            
+            nes_display_draw_string(charging_x, charging_y, charging_text, COLOR_CHARGING, 1);
+        }
+    } else {
+        // Show "??" if level unknown
+        nes_display_draw_string(icon_x + 20, icon_y + icon_height + 4, "??", COLOR_FRAME, 2);
+    }
 }
 
 // Get framebuffer pointer (for direct access if needed)

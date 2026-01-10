@@ -374,7 +374,6 @@ static void system_video(bool draw)
 void nes_emulate(void)
 {
    int last_ticks, frames_to_render;
-   int frame_count = 0;  // Counter for periodic delay
 
    osd_setsound(nes.apu->process);
 
@@ -415,13 +414,9 @@ void nes_emulate(void)
          nes_renderframe(false);
          system_video(false);
 #ifdef ESP_PLATFORM
-         frame_count++;
          esp_task_wdt_reset();  // Feed watchdog after frame
-         // Every 60 frames (~1 second), give IDLE task CPU time
-         if (frame_count >= 60) {
-            frame_count = 0;
-            vTaskDelay(1);
-         }
+         // Give timer task CPU time after each frame for stable 60 Hz
+         vTaskDelay(1);
 #endif
       }
       else if ((1 == frames_to_render && true == nes.autoframeskip) || false == nes.autoframeskip)
@@ -430,13 +425,16 @@ void nes_emulate(void)
          nes_renderframe(true);
          system_video(true);
 #ifdef ESP_PLATFORM
-         frame_count++;
          esp_task_wdt_reset();  // Feed watchdog after frame
-         // Every 60 frames (~1 second), give IDLE task CPU time
-         if (frame_count >= 60) {
-            frame_count = 0;
-            vTaskDelay(1);
-         }
+         // Give timer task CPU time after each frame for stable 60 Hz
+         vTaskDelay(1);
+#endif
+      }
+      else
+      {
+         // No frames to render - give CPU time to timer task
+#ifdef ESP_PLATFORM
+         vTaskDelay(1);
 #endif
       }
    }

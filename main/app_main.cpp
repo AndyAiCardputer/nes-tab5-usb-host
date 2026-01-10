@@ -13,6 +13,7 @@
 #include "nvs_flash.h"
 #include "nes_osd.h"
 #include "bsp/m5stack_tab5.h"
+#include "battery_monitor.h"
 #include "usb/usb_host.h"
 #include "usb/hid_host.h"
 #include "usb/hid.h"
@@ -108,6 +109,9 @@ static void hid_host_device_event(hid_host_device_handle_t hid_device_handle,
             ESP_ERROR_CHECK(hid_host_device_open(hid_device_handle, &dev_config));
             ESP_ERROR_CHECK(hid_host_device_start(hid_device_handle));
             
+            // Wait for device to initialize (as in working nes_tab5_usb_host project)
+            vTaskDelay(pdMS_TO_TICKS(100));
+            
             ESP_LOGI(TAG, "USB Gamepad ready!");
             break;
         }
@@ -174,9 +178,15 @@ static void drawFileBrowser(void)
     if (romCount > 0) {
         char counter[32];
         snprintf(counter, sizeof(counter), "%d/%d", selectedFile + 1, romCount);
-        int counter_x = DISPLAY_WIDTH - strlen(counter) * 8 * 2 - 20;
+        // Move counter left to avoid overlap with battery indicator (battery starts at x=1230)
+        // Counter width: ~64 pixels, battery width: ~50 pixels + text
+        // Position counter at x=1100 to leave ~80 pixels gap
+        int counter_x = DISPLAY_WIDTH - strlen(counter) * 8 * 2 - 180;  // Changed from -20 to -180
         nes_display_draw_string(counter_x, 20, counter, COLOR_WHITE, 2);
     }
+    
+    // Draw battery indicator in top-right corner
+    nes_display_draw_battery_indicator();
     
     // File list area (no border)
     int list_x = 20;
@@ -314,55 +324,97 @@ extern "C" void app_main(void)
     
     ESP_LOGI(TAG, "SD card initialized and mounted at /sd");
     
+    // Check if USB-C is connected (may conflict with USB Host)
+    bool usb_c_connected = bsp_usb_c_detect();
+    if (usb_c_connected) {
+        ESP_LOGW(TAG, "USB-C cable detected - USB Host may not work");
+        ESP_LOGW(TAG, "Disconnect USB-C cable from computer for USB Host to work");
+    }
+    
     // Start USB Host
     ESP_LOGI(TAG, "Initializing USB Host...");
-    ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
-    
-    // Enable USB-A port power
-    bsp_set_usb_5v_en(true);
-    vTaskDelay(pdMS_TO_TICKS(100));
-    
-    // Enable USB Host root port power
-    ret = usb_host_lib_set_root_port_power(true);
-    if (ret == ESP_ERR_INVALID_STATE) {
-        ESP_LOGI(TAG, "USB Host root port power already enabled");
-    }
-    
-    // Register USB Host client
-    usb_host_client_config_t client_config = {
-        .is_synchronous = false,
-        .max_num_event_msg = 5,
-        .async = {
-            .client_event_callback = usb_host_event_callback,
-            .callback_arg = NULL
+    esp_err_t usb_host_ret = bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true);
+    if (usb_host_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start USB Host: %s", esp_err_to_name(usb_host_ret));
+        ESP_LOGW(TAG, "USB Host disabled - USB gamepad will not work");
+        // Continue without USB Host
+    } else {
+        // Warning: USB Host may not work when device is connected to computer via USB-C
+        if (usb_c_connected) {
+            ESP_LOGW(TAG, "NOTE: USB Host may not work when connected to computer via USB-C");
+            ESP_LOGW(TAG, "Disconnect USB-C cable from computer for USB Host to work");
         }
-    };
-    
-    ret = usb_host_client_register(&client_config, &s_usb_client_handle);
-    if (ret == ESP_OK) {
-        xTaskCreate(usb_host_client_task, "usb_host_client", 4096, NULL, 5, NULL);
-        ESP_LOGI(TAG, "USB Host client registered");
-    } else {
-        ESP_LOGW(TAG, "Failed to register USB Host client: %s", esp_err_to_name(ret));
+        
+        // Enable USB-A port power
+        bsp_set_usb_5v_en(true);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        
+        // Enable USB Host root port power
+        ret = usb_host_lib_set_root_port_power(true);
+        if (ret == ESP_ERR_INVALID_STATE) {
+            ESP_LOGI(TAG, "USB Host root port power already enabled");
+        }
+        
+        // Register USB Host client
+        usb_host_client_config_t client_config = {
+            .is_synchronous = false,
+            .max_num_event_msg = 5,
+            .async = {
+                .client_event_callback = usb_host_event_callback,
+                .callback_arg = NULL
+            }
+        };
+        
+        ret = usb_host_client_register(&client_config, &s_usb_client_handle);
+        if (ret == ESP_OK) {
+            xTaskCreate(usb_host_client_task, "usb_host_client", 4096, NULL, 5, NULL);
+            ESP_LOGI(TAG, "USB Host client registered");
+        } else {
+            ESP_LOGW(TAG, "Failed to register USB Host client: %s", esp_err_to_name(ret));
+        }
+        
+        // Install HID Host driver
+        const hid_host_driver_config_t hid_host_driver_config = {
+            .create_background_task = true,
+            .task_priority = 5,
+            .stack_size = 4096,
+            .core_id = 0,
+            .callback = hid_host_device_event,
+            .callback_arg = NULL
+        };
+        
+        ret = hid_host_install(&hid_host_driver_config);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "HID Host driver installed");
+            ESP_LOGI(TAG, "Waiting for USB gamepad to be connected...");
+            ESP_LOGI(TAG, "Connect gamepad to USB-A port on Tab5");
+        } else {
+            ESP_LOGW(TAG, "Failed to install HID Host driver: %s", esp_err_to_name(ret));
+        }
     }
     
-    // Install HID Host driver
-    const hid_host_driver_config_t hid_host_driver_config = {
-        .create_background_task = true,
-        .task_priority = 5,
-        .stack_size = 4096,
-        .core_id = 0,
-        .callback = hid_host_device_event,
-        .callback_arg = NULL
-    };
+    // Initialize battery monitor AFTER USB Host (to avoid conflicts)
+    ESP_LOGI(TAG, "Enabling battery charging...");
+    bsp_set_charge_en(true);
+    ESP_LOGI(TAG, "Battery charging enabled");
     
-    ret = hid_host_install(&hid_host_driver_config);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "HID Host driver installed");
-        ESP_LOGI(TAG, "Waiting for USB gamepad to be connected...");
-        ESP_LOGI(TAG, "Connect gamepad to USB-A port on Tab5");
+    ESP_LOGI(TAG, "Initializing battery monitor...");
+    i2c_master_bus_handle_t i2c_bus = bsp_i2c_get_handle();
+    if (i2c_bus) {
+        ret = battery_monitor_init(i2c_bus);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Battery monitor initialized successfully");
+            battery_status_t status;
+            if (battery_monitor_read(&status) == ESP_OK) {
+                ESP_LOGI(TAG, "Battery: %d%%, %dmV, Charging: %s", 
+                         status.level, status.voltage_mv, 
+                         status.is_charging ? "YES" : "NO");
+            }
+        } else {
+            ESP_LOGW(TAG, "Battery monitor initialization failed: %s", esp_err_to_name(ret));
+        }
     } else {
-        ESP_LOGW(TAG, "Failed to install HID Host driver: %s", esp_err_to_name(ret));
+        ESP_LOGW(TAG, "I2C bus not available for battery monitor");
     }
     
     // Scan ROM files

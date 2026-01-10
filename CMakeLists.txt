@@ -5,5 +5,5 @@ set(EXTRA_COMPONENT_DIRS
     "components"
 )
 
-project(nes_tab5_usb_host)
+project(tab5_nes_emulator_battery)
 
