@@ -11,8 +11,10 @@ This guide explains how to set up and deploy the web flasher to GitHub Pages.
 
 1. Go to your repository on GitHub
 2. Click **Settings** → **Pages**
-3. Under **Source**, select **GitHub Actions**
-4. Save the settings
+3. Under **Source**, select **"Deploy from a branch"** (classic method)
+4. Select branch: **main** (or **master**)
+5. Select folder: **/ (root)** or **/webflasher**
+6. Click **Save**
 
 ## Step 2: Push Files to Repository
 
@@ -78,9 +80,10 @@ You can also trigger deployment manually:
 
 ### GitHub Pages Not Updating
 
-- Check GitHub Actions logs for errors
-- Ensure `webflasher/` files are committed
-- Verify GitHub Pages is set to use GitHub Actions source
+- Check that files are committed and pushed
+- Wait 1-2 minutes after pushing
+- Verify GitHub Pages is set to use branch as source
+- Check deployment logs in Settings → Pages → View deployment logs
 
 ### Binary Files Too Large
 
