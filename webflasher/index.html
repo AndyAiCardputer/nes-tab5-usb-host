@@ -89,9 +89,17 @@
         </div>
 
         <esp-web-install-button 
-            manifest="manifest.json"
-            install-unsupported="true">
+            manifest="manifest-three-files.json"
+            install-unsupported="true"
+            onerror="handleFlashError(event)">
         </esp-web-install-button>
+        
+        <script>
+        function handleFlashError(event) {
+            console.error('Flash error:', event.detail);
+            alert('Flash error: ' + (event.detail?.message || 'Unknown error'));
+        }
+        </script>
 
         <h2>After Flashing:</h2>
         <ul>

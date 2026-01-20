@@ -113,8 +113,9 @@
 
         <div id="install-area">
             <esp-web-install-button 
-                manifest="manifest.json"
-                install-unsupported="true">
+                manifest="manifest-three-files.json"
+                install-unsupported="true"
+                onerror="handleFlashError(event)">
             </esp-web-install-button>
             <button class="button-fallback" onclick="handleFallbackClick()">
                 Install Button Not Loading? Click Here for Help
@@ -152,6 +153,11 @@
     </div>
     
     <script>
+        function handleFlashError(event) {
+            console.error('Flash error:', event.detail);
+            alert('Flash error: ' + (event.detail?.message || 'Unknown error'));
+        }
+        
         function handleFallbackClick() {
             const msg = 'The install button requires:\n\n' +
                        '1. Chrome 89+, Edge 89+, or Opera 75+\n' +
